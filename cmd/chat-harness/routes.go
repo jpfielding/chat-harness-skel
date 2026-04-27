@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+
+	"github.com/jpfielding/chat-harness-skel/pkg/chat"
+	"github.com/jpfielding/chat-harness-skel/pkg/httpapi"
 )
 
-// newMux builds the HTTP mux with middleware. In Phase 0 every /api/* route
-// returns 501 Not Implemented; Phase 1 wires real handlers.
-func newMux(logger *slog.Logger, token string) http.Handler {
+// newMux builds the HTTP mux with middleware. Phase 1 wires /api/chat and
+// /api/models. Streaming and sessions are Phase 2/3.
+func newMux(logger *slog.Logger, token string, h *chat.Harness) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -19,11 +22,12 @@ func newMux(logger *slog.Logger, token string) http.Handler {
 		})
 	})
 
+	mux.Handle("GET /api/models", httpapi.ModelsHandler(h))
+	mux.Handle("POST /api/chat", httpapi.ChatHandler(h))
+
 	notImplemented := func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "not implemented in Phase 0", http.StatusNotImplemented)
+		http.Error(w, "not implemented yet", http.StatusNotImplemented)
 	}
-	mux.HandleFunc("GET /api/models", notImplemented)
-	mux.HandleFunc("POST /api/chat", notImplemented)
 	mux.HandleFunc("POST /api/chat/stream", notImplemented)
 	mux.HandleFunc("POST /api/sessions", notImplemented)
 	mux.HandleFunc("GET /api/sessions", notImplemented)

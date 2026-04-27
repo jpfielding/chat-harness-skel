@@ -1,0 +1,11 @@
+{
+  "id": "msg_01ABC",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-4-5",
+  "content": [
+    {"type": "text", "text": "Hello! How can I help you today?"}
+  ],
+  "stop_reason": "end_turn",
+  "usage": {"input_tokens": 12, "output_tokens": 10}
+}

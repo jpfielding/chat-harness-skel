@@ -1,0 +1,23 @@
+{
+  "id": "chatcmpl-bad",
+  "object": "chat.completion",
+  "model": "gpt-5",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_malformed",
+            "type": "function",
+            "function": {"name": "lookup_weather", "arguments": "{\"city\":Portland"}
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {"prompt_tokens": 5, "completion_tokens": 8, "total_tokens": 13}
+}

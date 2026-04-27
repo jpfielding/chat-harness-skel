@@ -10,6 +10,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/jpfielding/chat-harness-skel/pkg/chat"
+	"github.com/jpfielding/chat-harness-skel/pkg/core"
 )
 
 // Set via -ldflags at build time.
@@ -24,7 +27,6 @@ func main() {
 
 	a, err := parseArgs(os.Args[1:])
 	if err != nil {
-		// flag.ContinueOnError has already printed usage.
 		os.Exit(2)
 	}
 
@@ -33,47 +35,76 @@ func main() {
 		return
 	}
 
+	cfg, err := core.Load(a.ConfigPath)
+	if err != nil {
+		logger.Error("config load failed", "path", a.ConfigPath, "err", err)
+		os.Exit(1)
+	}
+
 	if a.ValidateConfig {
-		// Phase 1 fleshes this out; for now we just confirm the file is readable.
-		if _, err := os.Stat(a.ConfigPath); err != nil {
-			logger.Error("config not found", "path", a.ConfigPath, "err", err)
-			os.Exit(1)
-		}
+		notes, _ := cfg.ValidateEnv()
 		fmt.Printf("config ok: %s\n", a.ConfigPath)
+		fmt.Printf("server.addr=%s  auth.token_env=%s\n", cfg.Server.Addr, cfg.Auth.TokenEnv)
+		fmt.Printf("policies (%d):\n", len(cfg.Policy))
+		for _, p := range cfg.Policy {
+			fmt.Printf("  - %s: %v\n", p.Name, p.Candidates)
+		}
+		fmt.Printf("router.default_policy=%s  fallback_on=%v  max_attempts=%d  per_attempt_timeout_ms=%d\n",
+			cfg.Router.DefaultPolicy, cfg.Router.FallbackOnKinds, cfg.Router.MaxAttempts, cfg.Router.PerAttemptTimeoutMS)
+		fmt.Println("providers:")
+		for _, n := range notes {
+			fmt.Printf("  - %s\n", n)
+		}
 		return
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	svc, err := core.Build(cfg, logger)
+	if err != nil {
+		logger.Error("service build failed", "err", err)
+		os.Exit(1)
+	}
 
 	addr := a.Addr
+	if addr == "" {
+		addr = cfg.Server.Addr
+	}
 	if addr == "" {
 		addr = ":8080"
 	}
 
-	// Auth: default closed. Refuse to start if token is missing unless
-	// --allow-unauthenticated or CHAT_HARNESS_INSECURE_ALLOW_OPEN=1.
-	token := os.Getenv("CHAT_HARNESS_TOKEN")
+	tokenEnv := cfg.Auth.TokenEnv
+	if tokenEnv == "" {
+		tokenEnv = "CHAT_HARNESS_TOKEN"
+	}
+	token := os.Getenv(tokenEnv)
 	openFlag := a.AllowUnauthenticated || os.Getenv("CHAT_HARNESS_INSECURE_ALLOW_OPEN") == "1"
 	if token == "" && !openFlag {
-		logger.Error("CHAT_HARNESS_TOKEN is unset; refusing to start in closed mode",
-			"hint", "set CHAT_HARNESS_TOKEN, or pass --allow-unauthenticated for dev")
+		logger.Error("auth token unset; refusing to start in closed mode",
+			"token_env", tokenEnv,
+			"hint", fmt.Sprintf("set $%s, or pass --allow-unauthenticated for dev", tokenEnv))
 		os.Exit(1)
 	}
 	if token == "" && openFlag {
 		logger.Warn("CRIT: running without authentication (--allow-unauthenticated)")
 	}
 
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           newMux(logger, token),
+		Handler:           newMux(logger, token, svc.Harness),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("listening", "addr", addr, "version", GitSHA)
+		logger.Info("listening",
+			"addr", addr,
+			"version", GitSHA,
+			"providers", providerNames(svc.Harness),
+		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -97,4 +128,8 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("shutdown complete")
+}
+
+func providerNames(h *chat.Harness) []string {
+	return h.Providers()
 }

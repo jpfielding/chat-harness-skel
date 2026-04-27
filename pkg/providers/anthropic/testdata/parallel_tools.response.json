@@ -1,0 +1,13 @@
+{
+  "id": "msg_02XYZ",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-4-5",
+  "content": [
+    {"type": "text", "text": "Let me look those up for you."},
+    {"type": "tool_use", "id": "toolu_01AAA", "name": "lookup_weather", "input": {"city": "Portland"}},
+    {"type": "tool_use", "id": "toolu_01BBB", "name": "lookup_weather", "input": {"city": "Seattle"}}
+  ],
+  "stop_reason": "tool_use",
+  "usage": {"input_tokens": 35, "output_tokens": 48}
+}
