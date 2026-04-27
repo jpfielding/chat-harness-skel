@@ -5,9 +5,13 @@ import (
 	"log/slog"
 	"os"
 
+	"time"
+
 	"github.com/jpfielding/chat-harness-skel/pkg/chat"
 	"github.com/jpfielding/chat-harness-skel/pkg/providers/anthropic"
+	"github.com/jpfielding/chat-harness-skel/pkg/providers/ollama"
 	"github.com/jpfielding/chat-harness-skel/pkg/providers/openai"
+	"github.com/jpfielding/chat-harness-skel/pkg/router"
 	"github.com/jpfielding/chat-harness-skel/pkg/session"
 )
 
@@ -26,9 +30,11 @@ type Service struct {
 // start the server with only some providers enabled.
 func Build(cfg *Config, logger *slog.Logger) (*Service, error) {
 	store := session.NewMemoryStore(session.MaxMessagesCap)
+	catalog := chat.NewCatalog()
 	harness := chat.New(
 		chat.WithLogger(logger),
 		chat.WithSessions(session.NewBinder(store)),
+		chat.WithCatalog(catalog),
 	)
 
 	for name, pb := range cfg.Providers {
@@ -68,12 +74,48 @@ func Build(cfg *Config, logger *slog.Logger) (*Service, error) {
 			chat.WithProvider(p)(harness)
 			registerModels(harness, p.Models())
 		case "ollama":
-			// Phase 4.
-			logger.Info("ollama provider declared, but not implemented until Phase 4")
+			p, err := ollama.New(ollama.Config{BaseURL: pb.BaseURL})
+			if err != nil {
+				logger.Warn("ollama provider skipped", "err", err)
+				continue
+			}
+			chat.WithProvider(p)(harness)
+			registerModels(harness, p.Models())
+			logger.Info("ollama registered", "tools_supported", p.SupportsTools())
 		default:
 			logger.Warn("unknown provider in config", "name", name)
 		}
 	}
+
+	// Build the router from policies in config.
+	policies := make([]router.Policy, 0, len(cfg.Policy))
+	for _, p := range cfg.Policy {
+		cands := make([]chat.ModelRef, 0, len(p.Candidates))
+		for _, s := range p.Candidates {
+			ref, err := chat.ParseModelRef(s)
+			if err != nil {
+				return nil, err
+			}
+			cands = append(cands, ref)
+		}
+		policies = append(policies, router.Policy{Name: p.Name, Candidates: cands})
+	}
+	r, err := router.NewPolicyRouter(catalog, cfg.Router.DefaultPolicy, policies)
+	if err != nil {
+		return nil, fmt.Errorf("build router: %w", err)
+	}
+	chat.WithRouter(r)(harness)
+
+	// Fallback policy.
+	fb := chat.FallbackPolicy{
+		FallbackOnKinds:   map[chat.ErrorKind]bool{},
+		MaxAttempts:       cfg.Router.MaxAttempts,
+		PerAttemptTimeout: time.Duration(cfg.Router.PerAttemptTimeoutMS) * time.Millisecond,
+	}
+	for _, k := range cfg.Router.FallbackOnKinds {
+		fb.FallbackOnKinds[chat.ErrorKind(k)] = true
+	}
+	chat.WithFallback(fb)(harness)
 
 	return &Service{Cfg: cfg, Harness: harness, Sessions: store, Logger: logger}, nil
 }

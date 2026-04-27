@@ -70,7 +70,10 @@ func TestAppendMessages_OptimisticConcurrency(t *testing.T) {
 		ExpectedVersion: 1,
 		Messages:        []chat.Message{chat.UserText("hi")},
 	})
-	resp, _ := http.Post(srv.URL+"/api/sessions/s1/messages", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(srv.URL+"/api/sessions/s1/messages", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("first append status=%d", resp.StatusCode)
@@ -81,17 +84,23 @@ func TestAppendMessages_OptimisticConcurrency(t *testing.T) {
 		ExpectedVersion: 1,
 		Messages:        []chat.Message{chat.UserText("bye")},
 	})
-	resp, _ = http.Post(srv.URL+"/api/sessions/s1/messages", "application/json", bytes.NewReader(body))
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusConflict {
-		t.Errorf("expected 409, got %d", resp.StatusCode)
+	resp2, err := http.Post(srv.URL+"/api/sessions/s1/messages", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusConflict {
+		t.Errorf("expected 409, got %d", resp2.StatusCode)
 	}
 }
 
 func TestGetSession_Missing404(t *testing.T) {
 	srv, _ := newSessionsServer()
 	defer srv.Close()
-	resp, _ := http.Get(srv.URL + "/api/sessions/ghost")
+	resp, err := http.Get(srv.URL + "/api/sessions/ghost")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status=%d", resp.StatusCode)
@@ -104,14 +113,20 @@ func TestDeleteSession_204ThenGone(t *testing.T) {
 	http.Post(srv.URL+"/api/sessions", "application/json", bytes.NewReader([]byte(`{"id":"s1"}`)))
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/sessions/s1", nil)
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("delete status=%d", resp.StatusCode)
 	}
-	resp, _ = http.Get(srv.URL + "/api/sessions/s1")
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("after delete GET = %d", resp.StatusCode)
+	resp2, err := http.Get(srv.URL + "/api/sessions/s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("after delete GET = %d", resp2.StatusCode)
 	}
 }

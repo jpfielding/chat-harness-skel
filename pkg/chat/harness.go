@@ -30,6 +30,19 @@ type SessionBinder interface {
 	Append(ctx context.Context, id string, expectedVersion int64, newMsgs ...Message) (newVersion int64, err error)
 }
 
+// FallbackPolicy controls the Harness's fallback executor. Empty
+// FallbackOnKinds disables fallback (only the first candidate is tried).
+type FallbackPolicy struct {
+	// FallbackOnKinds lists ErrorKinds that should trigger trying the next
+	// candidate. Any other error halts immediately.
+	FallbackOnKinds map[ErrorKind]bool
+	// MaxAttempts caps the number of candidates tried per request. 0 = no cap.
+	MaxAttempts int
+	// PerAttemptTimeout, if set, wraps each candidate's provider call in
+	// context.WithTimeout. 0 = no per-attempt timeout.
+	PerAttemptTimeout time.Duration
+}
+
 // Harness is the top-level entry point. It wires providers, the router, the
 // catalog, and (optionally) a session store into one Send/Stream surface.
 //
@@ -39,6 +52,7 @@ type Harness struct {
 	router    Router
 	catalog   *Catalog
 	sessions  SessionBinder
+	fallback  FallbackPolicy
 	logger    *slog.Logger
 	now       func() time.Time
 }
@@ -73,6 +87,12 @@ func WithLogger(l *slog.Logger) HarnessOption {
 // requests that specify a SessionID.
 func WithSessions(b SessionBinder) HarnessOption {
 	return func(h *Harness) { h.sessions = b }
+}
+
+// WithFallback sets the FallbackPolicy. Without this option, fallback is
+// disabled (only the first router candidate is tried).
+func WithFallback(fp FallbackPolicy) HarnessOption {
+	return func(h *Harness) { h.fallback = fp }
 }
 
 // Sessions returns the bound SessionBinder, or nil if none.
@@ -143,24 +163,16 @@ func (h *Harness) Send(ctx context.Context, req Request) (Response, error) {
 		req.Messages = merged
 	}
 
-	ref, err := h.pickSingle(req)
+	candidates, err := h.pickCandidates(ctx, req)
 	if err != nil {
 		return Response{}, err
 	}
-	prov, ok := h.providers[ref.Provider]
-	if !ok {
-		return Response{}, fmt.Errorf("provider %q not registered", ref.Provider)
-	}
-	req.Model = ref.String()
 
-	start := h.now()
-	resp, err := prov.Send(ctx, req)
+	resp, attempts, err := h.runSendFallback(ctx, req, candidates)
 	if err != nil {
-		return Response{}, err
+		return Response{Attempts: attempts}, err
 	}
-	if resp.Latency == 0 {
-		resp.Latency = h.now().Sub(start)
-	}
+	resp.Attempts = attempts
 
 	if req.SessionID != "" {
 		toAppend := append(append([]Message{}, newUserMsgs...), resp.Message)
@@ -199,35 +211,180 @@ func (h *Harness) Stream(ctx context.Context, req Request) (StreamReader, error)
 		req.Messages = merged
 	}
 
-	ref, err := h.pickSingle(req)
+	candidates, err := h.pickCandidates(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	prov, ok := h.providers[ref.Provider]
-	if !ok {
-		return nil, fmt.Errorf("provider %q not registered", ref.Provider)
+	// Streaming fallback is handshake-only: we may try multiple candidates
+	// while Stream() itself returns sync errors, but once a reader is
+	// returned (bytes possibly in flight), no further fallback.
+	for _, ref := range candidates {
+		prov, ok := h.providers[ref.Provider]
+		if !ok {
+			continue
+		}
+		attemptReq := req
+		attemptReq.Model = ref.String()
+		reader, err := prov.Stream(ctx, attemptReq)
+		if err == nil {
+			return reader, nil
+		}
+		if !h.shouldFallback(err) {
+			return nil, err
+		}
 	}
-	req.Model = ref.String()
-	return prov.Stream(ctx, req)
+	return nil, fmt.Errorf("all stream candidates failed")
 }
 
-// pickSingle resolves req to a single ModelRef. It honors an explicit
-// req.Model ref, falling back to the router only when req.Model is empty.
-func (h *Harness) pickSingle(req Request) (ModelRef, error) {
+// pickCandidates resolves req to an ordered list of ModelRefs.
+// An explicit req.Model disables fallback (single-element list).
+// When the router is unset and req.Model is empty, the call fails.
+func (h *Harness) pickCandidates(ctx context.Context, req Request) ([]ModelRef, error) {
 	if req.Model != "" {
-		return ParseModelRef(req.Model)
+		ref, err := ParseModelRef(req.Model)
+		if err != nil {
+			return nil, err
+		}
+		return []ModelRef{ref}, nil
 	}
 	if h.router == nil {
-		return ModelRef{}, fmt.Errorf("no router configured and req.Model is empty")
+		return nil, fmt.Errorf("no router configured and req.Model is empty")
 	}
-	refs, err := h.router.Pick(context.Background(), req)
+	refs, err := h.router.Pick(ctx, req)
 	if err != nil {
-		return ModelRef{}, err
+		return nil, err
 	}
 	if len(refs) == 0 {
-		return ModelRef{}, fmt.Errorf("router returned no candidates")
+		return nil, fmt.Errorf("router returned no candidates")
 	}
-	return refs[0], nil
+	return refs, nil
+}
+
+// runSendFallback iterates candidates, stopping at the first success or a
+// non-fallbackable error. Returns the successful Response along with the
+// Attempts log (including any failures that preceded success). The max-
+// attempts cap, per-attempt timeout, and AfterOutput gating all apply.
+func (h *Harness) runSendFallback(ctx context.Context, req Request, candidates []ModelRef) (Response, []Attempt, error) {
+	max := h.fallback.MaxAttempts
+	if max == 0 || max > len(candidates) {
+		max = len(candidates)
+	}
+	var attempts []Attempt
+	var lastErr error
+	for i := 0; i < max; i++ {
+		ref := candidates[i]
+		prov, ok := h.providers[ref.Provider]
+		if !ok {
+			lastErr = fmt.Errorf("provider %q not registered", ref.Provider)
+			attempts = append(attempts, Attempt{
+				Provider: ref.Provider,
+				Model:    ref.Model,
+				Error:    &ProviderError{Kind: ErrKindNotFound, Provider: ref.Provider, Model: ref.Model, Message: "provider not registered"},
+			})
+			continue
+		}
+
+		attemptCtx := ctx
+		var cancel context.CancelFunc
+		if h.fallback.PerAttemptTimeout > 0 {
+			attemptCtx, cancel = context.WithTimeout(ctx, h.fallback.PerAttemptTimeout)
+		}
+		attemptReq := req
+		attemptReq.Model = ref.String()
+
+		start := h.now()
+		resp, err := prov.Send(attemptCtx, attemptReq)
+		if cancel != nil {
+			cancel()
+		}
+		latency := h.now().Sub(start)
+
+		att := Attempt{
+			Provider: ref.Provider,
+			Model:    ref.Model,
+			Latency:  latency,
+		}
+		if err != nil {
+			var pe *ProviderError
+			if errors.As(err, &pe) {
+				att.Error = pe
+				att.RequestID = pe.RequestID
+			} else {
+				att.Error = &ProviderError{Kind: ErrKindUnknown, Provider: ref.Provider, Model: ref.Model, Err: err}
+			}
+			attempts = append(attempts, att)
+			lastErr = err
+
+			if att.Error != nil && att.Error.AfterOutput {
+				// Cannot fall back safely once bytes were emitted.
+				return Response{}, attempts, err
+			}
+			if !h.shouldFallback(err) {
+				return Response{}, attempts, err
+			}
+			// For context_length: only fall back to a strictly larger context window.
+			if pe != nil && pe.Kind == ErrKindContextLength {
+				candidates = h.filterLargerContext(pe.Model, candidates[i+1:])
+				// Reset the loop: we've rewritten the list ahead, adjust i and max.
+				candidates = append([]ModelRef{}, candidates...) // defensive copy
+				// Rebuild the loop shape.
+				next := []ModelRef{}
+				next = append(next, candidates...)
+				candidates = next
+				i = -1
+				max = len(candidates)
+				if max == 0 {
+					return Response{}, attempts, err
+				}
+				continue
+			}
+			continue
+		}
+
+		if resp.Latency == 0 {
+			resp.Latency = latency
+		}
+		attempts = append(attempts, att)
+		resp.Ref = ref
+		return resp, attempts, nil
+	}
+	return Response{}, attempts, lastErr
+}
+
+func (h *Harness) shouldFallback(err error) bool {
+	if h.fallback.FallbackOnKinds == nil {
+		return false
+	}
+	var pe *ProviderError
+	if !errors.As(err, &pe) {
+		return false
+	}
+	return h.fallback.FallbackOnKinds[pe.Kind]
+}
+
+// filterLargerContext returns the subset of remaining candidates whose
+// catalog ContextTokens strictly exceeds the failed model's. If the
+// catalog has no data for either side, the candidate is kept (config
+// is authoritative).
+func (h *Harness) filterLargerContext(failedModel string, remaining []ModelRef) []ModelRef {
+	var failedCtx int
+	for _, mi := range h.catalog.List() {
+		if mi.Ref.Model == failedModel {
+			failedCtx = mi.ContextTokens
+			break
+		}
+	}
+	if failedCtx == 0 {
+		return remaining
+	}
+	out := make([]ModelRef, 0, len(remaining))
+	for _, ref := range remaining {
+		info, ok := h.catalog.Lookup(ref)
+		if !ok || info.ContextTokens == 0 || info.ContextTokens > failedCtx {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 type discardWriter struct{}
