@@ -53,6 +53,14 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: ve.Error(), Kind: "InvalidRequest"})
 		return
 	}
+	if errors.Is(err, chat.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: err.Error(), Kind: "NotFound"})
+		return
+	}
+	if errors.Is(err, chat.ErrVersionConflict) {
+		writeJSON(w, http.StatusConflict, errorResponse{Error: err.Error(), Kind: "VersionConflict"})
+		return
+	}
 	writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error(), Kind: "Unknown"})
 }
 

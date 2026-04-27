@@ -5,13 +5,13 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/jpfielding/chat-harness-skel/pkg/chat"
+	"github.com/jpfielding/chat-harness-skel/pkg/core"
 	"github.com/jpfielding/chat-harness-skel/pkg/httpapi"
 )
 
-// newMux builds the HTTP mux with middleware. Phase 1 wires /api/chat and
-// /api/models. Streaming and sessions are Phase 2/3.
-func newMux(logger *slog.Logger, token string, h *chat.Harness) http.Handler {
+// newMux builds the HTTP mux with middleware. Wires every route the
+// Service currently supports.
+func newMux(logger *slog.Logger, token string, svc *core.Service) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -22,18 +22,18 @@ func newMux(logger *slog.Logger, token string, h *chat.Harness) http.Handler {
 		})
 	})
 
-	mux.Handle("GET /api/models", httpapi.ModelsHandler(h))
-	mux.Handle("POST /api/chat", httpapi.ChatHandler(h))
-	mux.Handle("POST /api/chat/stream", httpapi.StreamHandler(h))
+	mux.Handle("GET /api/models", httpapi.ModelsHandler(svc.Harness))
+	mux.Handle("POST /api/chat", httpapi.ChatHandler(svc.Harness))
+	mux.Handle("POST /api/chat/stream", httpapi.StreamHandler(svc.Harness))
 
-	notImplemented := func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "not implemented yet", http.StatusNotImplemented)
-	}
-	mux.HandleFunc("POST /api/sessions", notImplemented)
-	mux.HandleFunc("GET /api/sessions", notImplemented)
-	mux.HandleFunc("GET /api/sessions/{id}", notImplemented)
-	mux.HandleFunc("POST /api/sessions/{id}/messages", notImplemented)
-	mux.HandleFunc("DELETE /api/sessions/{id}", notImplemented)
+	// Session CRUD is served by its own sub-mux; attach each verb+path
+	// explicitly so the outer mux's method routing still works.
+	sess := httpapi.SessionsHandler(svc.Sessions)
+	mux.Handle("POST /api/sessions", sess)
+	mux.Handle("GET /api/sessions", sess)
+	mux.Handle("GET /api/sessions/{id}", sess)
+	mux.Handle("POST /api/sessions/{id}/messages", sess)
+	mux.Handle("DELETE /api/sessions/{id}", sess)
 
 	return withCORS(withRequestLogging(logger, withAuth(token, mux)))
 }

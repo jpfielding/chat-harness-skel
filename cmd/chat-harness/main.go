@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jpfielding/chat-harness-skel/pkg/chat"
 	"github.com/jpfielding/chat-harness-skel/pkg/core"
 )
 
@@ -93,7 +92,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           newMux(logger, token, svc.Harness),
+		Handler:           newMux(logger, token, svc),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -103,7 +102,7 @@ func main() {
 		logger.Info("listening",
 			"addr", addr,
 			"version", GitSHA,
-			"providers", providerNames(svc.Harness),
+			"providers", providerNames(svc),
 		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -130,6 +129,6 @@ func main() {
 	logger.Info("shutdown complete")
 }
 
-func providerNames(h *chat.Harness) []string {
-	return h.Providers()
+func providerNames(svc *core.Service) []string {
+	return svc.Harness.Providers()
 }

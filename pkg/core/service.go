@@ -8,14 +8,16 @@ import (
 	"github.com/jpfielding/chat-harness-skel/pkg/chat"
 	"github.com/jpfielding/chat-harness-skel/pkg/providers/anthropic"
 	"github.com/jpfielding/chat-harness-skel/pkg/providers/openai"
+	"github.com/jpfielding/chat-harness-skel/pkg/session"
 )
 
 // Service bundles a configured Harness, its logger, and the Config used to
 // build it. The HTTP layer takes a *Service to build handlers.
 type Service struct {
-	Cfg     *Config
-	Harness *chat.Harness
-	Logger  *slog.Logger
+	Cfg      *Config
+	Harness  *chat.Harness
+	Sessions session.Store
+	Logger   *slog.Logger
 }
 
 // Build constructs providers from cfg, wires them into a Harness, and
@@ -23,7 +25,11 @@ type Service struct {
 // are skipped with a warning rather than failing startup — the user can
 // start the server with only some providers enabled.
 func Build(cfg *Config, logger *slog.Logger) (*Service, error) {
-	harness := chat.New(chat.WithLogger(logger))
+	store := session.NewMemoryStore(session.MaxMessagesCap)
+	harness := chat.New(
+		chat.WithLogger(logger),
+		chat.WithSessions(session.NewBinder(store)),
+	)
 
 	for name, pb := range cfg.Providers {
 		if !pb.Enabled {
@@ -69,7 +75,7 @@ func Build(cfg *Config, logger *slog.Logger) (*Service, error) {
 		}
 	}
 
-	return &Service{Cfg: cfg, Harness: harness, Logger: logger}, nil
+	return &Service{Cfg: cfg, Harness: harness, Sessions: store, Logger: logger}, nil
 }
 
 // resolveKey tries the configured env var, then the provider's ResolveAPIKey
