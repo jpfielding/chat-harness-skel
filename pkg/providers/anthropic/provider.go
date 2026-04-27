@@ -153,16 +153,6 @@ func (p *Provider) Send(ctx context.Context, req chat.Request) (chat.Response, e
 	return out, nil
 }
 
-// Stream is not yet implemented; returns a ProviderError of kind Unknown.
-// Phase 2 implements the SSE path.
-func (p *Provider) Stream(ctx context.Context, req chat.Request) (chat.StreamReader, error) {
-	return nil, &chat.ProviderError{
-		Kind:     chat.ErrKindUnknown,
-		Provider: providerName,
-		Message:  "Stream not implemented in Phase 1",
-	}
-}
-
 func (p *Provider) wrapErr(kind chat.ErrorKind, status int, model string, afterOutput bool, err error) error {
 	return &chat.ProviderError{
 		Kind:        kind,

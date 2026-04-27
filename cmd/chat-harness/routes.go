@@ -24,11 +24,11 @@ func newMux(logger *slog.Logger, token string, h *chat.Harness) http.Handler {
 
 	mux.Handle("GET /api/models", httpapi.ModelsHandler(h))
 	mux.Handle("POST /api/chat", httpapi.ChatHandler(h))
+	mux.Handle("POST /api/chat/stream", httpapi.StreamHandler(h))
 
 	notImplemented := func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not implemented yet", http.StatusNotImplemented)
 	}
-	mux.HandleFunc("POST /api/chat/stream", notImplemented)
 	mux.HandleFunc("POST /api/sessions", notImplemented)
 	mux.HandleFunc("GET /api/sessions", notImplemented)
 	mux.HandleFunc("GET /api/sessions/{id}", notImplemented)
