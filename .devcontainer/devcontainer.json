@@ -1,0 +1,44 @@
+{
+  "name": "${localWorkspaceFolderBasename}",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "target": "user",
+    "args": {
+      "USERNAME": "${localEnv:USER:chat}"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "ms-vscode.hexeditor",
+        "GitHub.copilot-chat",
+        "Anthropic.claude-code",
+        "openai.chatgpt"
+      ]
+    }
+  },
+  "mounts": [
+    { "type": "bind", "source": "${localEnv:HOME}/.gitconfig",       "target": "/home/${localEnv:USER:chat}/.gitconfig" },
+    { "type": "bind", "source": "${localEnv:HOME}/.netrc",           "target": "/home/${localEnv:USER:chat}/.netrc" },
+    { "type": "bind", "source": "${localEnv:HOME}/.git-credentials", "target": "/home/${localEnv:USER:chat}/.git-credentials" },
+    { "type": "bind", "source": "${localEnv:HOME}/.ssh",             "target": "/home/${localEnv:USER:chat}/.ssh" },
+    { "type": "bind", "source": "${localEnv:HOME}/.claude",          "target": "/home/${localEnv:USER:chat}/.claude" },
+    { "type": "bind", "source": "${localEnv:HOME}/.codex",           "target": "/home/${localEnv:USER:chat}/.codex" },
+    { "type": "bind", "source": "${localEnv:HOME}/.bash_history_${localWorkspaceFolderBasename}", "target": "/home/${localEnv:USER:chat}/.bash_history" }
+  ],
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workdir/${localWorkspaceFolderBasename},type=bind,consistency=cached",
+  "workspaceFolder": "/workdir/${localWorkspaceFolderBasename}",
+  "initializeCommand": {
+    "netrc":        "touch ${localEnv:HOME}/.netrc",
+    "ssh dir":      "mkdir -p ${localEnv:HOME}/.ssh",
+    "gitconfig":    "touch ${localEnv:HOME}/.gitconfig",
+    "git creds":    "touch ${localEnv:HOME}/.git-credentials",
+    "claude":       "mkdir -p ${localEnv:HOME}/.claude || true",
+    "claude.json":  "touch ${localEnv:HOME}/.claude.json",
+    "codex":        "mkdir -p ${localEnv:HOME}/.codex || true",
+    "bash history": "touch ${localEnv:HOME}/.bash_history_${localWorkspaceFolderBasename}"
+  },
+  "forwardPorts": [8080]
+}

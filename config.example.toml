@@ -1,0 +1,52 @@
+# chat-harness example config.
+# Copy to ~/.config/chat-harness/config.toml and edit.
+
+[server]
+addr = ":8080"
+
+[auth]
+# The bearer token is read from this env var at startup. If unset and
+# --allow-unauthenticated is not passed, the server refuses to start.
+token_env = "CHAT_HARNESS_TOKEN"
+
+[providers.anthropic]
+enabled = true
+# api_key_env = "ANTHROPIC_API_KEY"  (default)
+
+[providers.openai]
+enabled = true
+# api_key_env = "OPENAI_API_KEY"  (default)
+
+[providers.ollama]
+enabled = true
+base_url = "http://localhost:11434"
+
+# Policy tiers: ordered candidate lists. First match wins; fallback progresses
+# on structured errors listed in [router].fallback_on_kinds.
+[[policy]]
+name = "fast"
+candidates = [
+  "openai:gpt-5-mini",
+  "anthropic:claude-haiku-4-5",
+  "ollama:llama3.1:8b",
+]
+
+[[policy]]
+name = "reasoning"
+candidates = [
+  "anthropic:claude-opus-4-5",
+  "openai:gpt-5",
+]
+
+[[policy]]
+name = "vision"
+candidates = [
+  "anthropic:claude-sonnet-4-5",
+  "openai:gpt-5",
+]
+
+[router]
+default_policy = "fast"
+fallback_on_kinds = ["RateLimit", "Timeout", "ServerError", "ContextLength", "Overloaded"]
+per_attempt_timeout_ms = 60000
+max_attempts = 3
